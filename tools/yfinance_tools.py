@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 def get_yfinance_ticker(stock_code: str) -> tuple:
@@ -22,11 +22,17 @@ def fetch_price_history(ticker: yf.Ticker, period: str = "3mo") -> pd.DataFrame:
     return ticker.history(period=period)
 
 
-def fetch_news(ticker: yf.Ticker, max_items: int = 10) -> list:
-    """Fetch recent news articles."""
+def fetch_news(ticker: yf.Ticker, max_items: int = 10, months: int = 3) -> list:
+    """Fetch recent news articles within the last `months` months."""
     try:
         news = ticker.news or []
-        return news[:max_items]
+        cutoff = datetime.now() - timedelta(days=30 * months)
+        cutoff_ts = cutoff.timestamp()
+        filtered = [
+            item for item in news
+            if item.get("providerPublishTime", 0) >= cutoff_ts
+        ]
+        return filtered[:max_items]
     except Exception:
         return []
 
