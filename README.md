@@ -2,55 +2,39 @@
 ### LLM Multi-Agent System for Korean Equity Research
 
 A partial replication of **BlackRock's AlphaAgents** (Zhao et al., 2025) adapted for Korean equities (KOSPI/KOSDAQ).  
-**Five specialized AI agents** collaborate, debate, and reach a consensus **BUY / SELL** recommendation — simultaneously under both **Risk-Averse** and **Risk-Neutral** investor profiles.
+**Five specialized AI agents** collaborate, debate, and reach a consensus **BUY / SELL** recommendation — simultaneously under both **Risk-Averse** and **Risk-Neutral** investor profiles — then automatically construct a portfolio and backtest it.
 
 ---
 
-## Overview
-
-Traditional equity research requires analysts to process vast amounts of financial disclosures, market news, price data, industry reports, and macroeconomic signals simultaneously. This system automates that process using a team of five LLM-powered agents, each specialising in a distinct analytical lens — mirroring how a real investment committee operates.
+## System Overview
 
 ```
 python3 main.py
         │
-        ▼
-  Enter stock ticker
+        ├── [N] New Analysis
+        │       │
+        │       ├── Enter as-of date  (YYYY/MM/DD)
+        │       └── Enter stock pool  (one or more tickers)
+        │               │
+        │               ▼
+        │   ┌───────────────────────────────────────────┐
+        │   │           OrchestratorAgent               │
+        │   │                                           │
+        │   │  For each stock:                          │
+        │   │    1. Fetch data  (DART + yfinance)       │
+        │   │    2. Run 5-agent debate × 2 profiles     │
+        │   │       (parallel)                          │
+        │   │    3. Save  .md reports + _signals.json   │
+        │   │                                           │
+        │   │  Once all stocks analysed:                │
+        │   │    4. PortfolioAgent → weights            │
+        │   │    5. BacktestEngine → charts             │
+        │   │    6. SummaryRenderer → PDF               │
+        │   └───────────────────────────────────────────┘
         │
-        ▼
-┌───────────────────────────────────────────────────────┐
-│                  Data Fetching  (shared)               │
-│                                                        │
-│  OpenDART          yfinance          yfinance          │
-│  사업보고서          Price / News       Sector / Macro   │
-│  분기보고서          (3-month OHLCV)    KRW/USD · KOSPI  │
-└──────────────────────────┬────────────────────────────┘
-                           │
-             ┌─────────────┴─────────────┐
-             ▼                           ▼
-       [Risk-Averse]               [Risk-Neutral]       ← parallel
-             │                           │
-             ▼                           ▼
-┌────────────────────────────────────────────────────┐
-│                 5 Specialist Agents                  │
-│                                                      │
-│  Fundamental  │  Sentiment  │  Valuation  │          │
-│  Market       │  Macro                              │
-└──────────────────────────┬─────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────┐
-│                  Debate Mechanism                     │
-│                                                      │
-│  Round 0   — Independent analysis → check unanimous  │
-│  Round 1–3 — Each agent reads all peers → update     │
-│              position → check unanimous              │
-│  After R3  — Majority vote (3-of-5)                  │
-│              No tie possible with 5 binary agents    │
-└──────────────────────────┬───────────────────────────┘
-                           │
-                           ▼
-              Markdown Report × 2
-         (risk-averse  +  risk-neutral)
+        ├── [L] Load Saved Signals   (skip analysis → go straight to portfolio & backtest)
+        │
+        └── [C] Convert MD Reports   (convert existing .md files to _signals.json)
 ```
 
 ---
@@ -59,65 +43,110 @@ python3 main.py
 
 | Agent | Data Source | Analytical Lens |
 |---|---|---|
-| **Fundamental** | OpenDART (사업보고서 / 분기보고서) | Revenue trends, margins, cash flow quality, debt levels, governance signals |
-| **Sentiment** | yfinance news feed | News sentiment, analyst rating changes, executive and insider-related signals |
-| **Valuation** | yfinance price & volume (3-month) | Price momentum, annualised return & volatility, volume confirmation |
-| **Market** | yfinance sector info + Korean peer tickers | Industry cycle, competitive positioning, sector tailwinds/headwinds, peer valuation comparison vs KOSPI |
-| **Macro** | yfinance: KRW/USD · KOSPI · KOSDAQ · S&P500 · NASDAQ · US 10Y · Oil · Gold | Currency impact on exporters/importers, interest rate environment, Korea vs global capital flows, commodity cost pressures |
+| **FundamentalAgent** | OpenDART (사업보고서 / 분기보고서) | Revenue trends, margins, cash flow quality, debt, governance |
+| **SentimentAgent** | yfinance news feed | News sentiment, analyst rating changes, insider signals |
+| **ValuationAgent** | yfinance price & volume (3-month window) | Price momentum, annualised return & volatility, volume confirmation |
+| **MarketAgent** | yfinance sector info + Korean peer tickers | Industry cycle, competitive positioning, peer valuation vs KOSPI |
+| **MacroAgent** | KRW/USD · KOSPI · KOSDAQ · S&P 500 · NASDAQ · US 10Y · Oil · Gold | Currency impact, interest rate environment, Korea vs global capital flows |
 
 Each agent is independently role-prompted with the chosen risk profile and produces a standalone **BUY / SELL** recommendation before entering the debate phase.
-
-> **Why extend to 5 agents?** The original BlackRock paper used 3 agents and explicitly identified macro and industry analysis as natural extensions. The **Market Agent** contextualises a company within its competitive landscape — a stock trading at fair value in a declining industry is still a risk. The **Macro Agent** captures Korea-specific sensitivities (KRW fluctuations, BOK policy, global capital flows, semiconductor cycles) that no company-level analysis alone can surface.
 
 ---
 
 ## Debate Mechanism
 
-Inspired by the Round-Robin debate in Zhao et al. (2025), with two prompt-engineering enhancements to produce more substantive disagreement:
-
 ```
 Round 0 — Independent Analysis  (Steelman enforced)
   All 5 agents analyse in isolation → each issues BUY or SELL
-  Before concluding, every agent must write the strongest 2-3 sentence
-  argument for the OPPOSITE signal, then explain why their conclusion
-  still holds — preventing reflexive, one-sided reasoning.
-  If all 5 agree → TERMINATE (unanimous, 0 debate rounds used)
+  Each agent must argue the strongest opposing case before concluding
+  If all 5 agree → TERMINATE  (unanimous, 0 debate rounds)
 
 Rounds 1–3 — Structured Debate  (Active challenge enforced)
-  Each agent receives the full analyses of all 4 peers
-  Agents must identify specific claims in peer analyses that conflict
-  with their own data, explain why those claims are wrong or overstated,
-  and cite their evidence — passive agreement is not accepted
-  Each agent explicitly states: MAINTAINING or CHANGING position, and why
-  After each round: if all 5 agree → TERMINATE (unanimous)
+  Each agent reads all 4 peers' analyses
+  Must cite specific conflicting claims and explain why they are wrong
+  Explicitly states: MAINTAINING or CHANGING position, and why
+  After each round: if all 5 agree → TERMINATE  (unanimous)
 
 After Round 3 — Majority Vote
-  3-of-5 wins
-  Possible outcomes: 5-0, 4-1, 3-2  (no tie with 5 binary agents)
-  Tie-break default: SELL (risk-averse)  /  BUY (risk-neutral)
+  3-of-5 wins  (5-0, 4-1, or 3-2 — no tie possible)
 ```
 
-Both risk profiles run **simultaneously** via `ThreadPoolExecutor` — data is fetched once and shared between both runs, halving total wall-clock time.
+Both risk profiles run **simultaneously** via `ThreadPoolExecutor` — data is fetched once and shared, halving wall-clock time.
 
 ---
 
-## Risk Profiles
+## Conviction Scoring
 
-Both profiles are run on every execution and produce separate reports.  
-The **only difference** between the two runs is the system prompt given to each agent — the underlying data is identical.
+Conviction is computed using **Option B — Agent Expertise Weighting**:
 
-| Behaviour | Risk-Averse | Risk-Neutral |
+```
+conviction = (weighted_vote × 0.6) + (round_score × 0.4)
+
+weighted_vote : sum of agent weights for agents agreeing with final signal
+round_score   : 1.0 at round 0 (instant consensus), decays to 0.0 at round 3
+```
+
+| Agent | Weight | Rationale |
 |---|---|---|
-| Ambiguity / tie-break default | **SELL** | **BUY** |
-| Volatility treatment | Penalised — high vol leans SELL | Contextual — return must compensate for risk |
-| Mixed news sentiment | Lean SELL | Weight evidence, let balance decide |
-| Industry uncertainty | Lean SELL | Assess net opportunity vs risk |
-| Macro uncertainty | Lean SELL | Assess directional impact on this company |
-| Growth vs stability | Stability and capital preservation preferred | Balanced — upside potential weighted equally |
-| Steelman requirement | Must argue strongest BUY case before concluding SELL | Must argue strongest SELL case before concluding BUY |
-| Debate challenge | Must dispute specific peer claims using fundamental data | Must dispute specific peer claims using fundamental data |
+| FundamentalAgent | 0.30 | Hardest quantitative data |
+| ValuationAgent | 0.25 | Direct price-signal evidence |
+| MacroAgent | 0.20 | Structural macro context |
+| MarketAgent | 0.15 | Industry positioning |
+| SentimentAgent | 0.10 | Softest / most noisy signal |
 
-> **Note on prompt engineering:** Both profiles share the same two debate-forcing instructions (`STEELMAN_INSTRUCTION` and `CHALLENGE_INSTRUCTION`) defined once in `base_agent.py` and injected into every agent's prompts. This ensures analytical rigour is profile-independent — what differs is the *weighting* of evidence, not the quality of reasoning.
+---
+
+## Portfolio Construction
+
+After all stocks are analysed, the **PortfolioAgent** constructs two separate portfolios:
+
+| Parameter | Risk-Averse | Risk-Neutral |
+|---|---|---|
+| Equity allocation | 60% | 80% |
+| Bond allocation (KODEX 국고채3년 · 114260) | 40% | 20% |
+| Min conviction threshold | 0.60 | 0.35 |
+| Stop-loss | −5% | −10% |
+| Take-profit | +10% | +20% |
+
+- Stocks below the conviction threshold or with a **SELL** signal receive **0% weight**
+- Equity weight is distributed **conviction-proportionally** across qualifying stocks
+- Remaining weight goes to the Korean 3Y Government Bond ETF
+
+---
+
+## Backtesting
+
+`BacktestEngine` fetches KRX prices via `pykrx` and computes:
+
+- **Cumulative Return** — portfolio vs. two benchmarks
+- **Rolling Sharpe Ratio** — 30-trading-day window (x-axis anchored to start date; warm-up period left blank)
+
+**Benchmarks overlaid on every chart:**
+1. **EW Benchmark** — equal-weight of all analysed stocks regardless of signal (orange)
+2. **S&P 500** — fetched via yfinance (green)
+
+Backtesting is skipped automatically if no stocks qualify for equity allocation in either profile.
+
+---
+
+## Output Files
+
+All outputs are saved to `reports/` with a consistent naming scheme:
+
+| File | Naming | Contents |
+|---|---|---|
+| MD report (per stock × profile) | `{ticker}_{name}_{as-of}_{averse\|neutral}.md` | Full agent analyses, debate log, signal summary |
+| Signal JSON (per stock) | `{ticker}_{name}_{as-of}_signals.json` | Structured signals for reloading without re-analysis |
+| Executive Summary PDF | `Exec Sum_{as-of}.pdf` | 2-page institutional PDF (see below) |
+
+### Executive Summary PDF
+
+Built with **reportlab** — institutional navy/gold design, Korean font support.
+
+| Page | Sections |
+|---|---|
+| Page 1 | §1 Stock Signals & Conviction table · §2 Portfolio Allocation cards + donut pie charts |
+| Page 2 | §3 Cross-Profile Narrative (Claude-written) · §4 Portfolio Metrics at a Glance · §5 Backtest Results chart |
 
 ---
 
@@ -126,36 +155,50 @@ The **only difference** between the two runs is the system prompt given to each 
 ```
 alpha_agents/
 │
-├── main.py                      # Entry point — prompts for ticker, runs both profiles
-├── config.py                    # API keys & model settings
+├── main.py                        # Entry point — [N] New / [L] Load / [C] Convert
+├── config.py                      # API keys & model settings
 ├── requirements.txt
-├── .env.example
 │
 ├── agents/
-│   ├── base_agent.py            # Claude (primary) + OpenAI (fallback) LLM wrapper
-│   │                            #   + STEELMAN_INSTRUCTION and CHALLENGE_INSTRUCTION constants
-│   ├── fundamental_agent.py     # OpenDART financial disclosure analysis
-│   ├── sentiment_agent.py       # News sentiment analysis
-│   ├── valuation_agent.py       # Price / volume / volatility analysis
-│   ├── market_agent.py          # Industry cycle, competitive landscape, peer comparison
-│   └── macro_agent.py           # KRW/USD, interest rates, KOSPI vs global indices
+│   ├── base_agent.py              # Claude (primary) + OpenAI (fallback) LLM wrapper
+│   ├── fundamental_agent.py       # OpenDART financial disclosure analysis
+│   ├── sentiment_agent.py         # News sentiment analysis
+│   ├── valuation_agent.py         # Price / volume / volatility analysis
+│   ├── market_agent.py            # Industry cycle, competitive landscape, peers
+│   └── macro_agent.py             # KRW/USD, rates, KOSPI vs global indices
 │
 ├── tools/
-│   ├── dart_tools.py            # OpenDART: corp code registry lookup + financial statements
-│   ├── yfinance_tools.py        # Auto-detects .KS/.KQ exchange, fetches price history & news
-│   ├── metrics_tools.py         # Annualised return & volatility (paper's exact formulas)
-│   ├── market_tools.py          # Sector classification, KOSPI benchmark, Korean peer tickers
-│   └── macro_tools.py           # KRW/USD, US yields, global indices, oil, gold
+│   ├── dart_tools.py              # OpenDART: corp registry + financial statements
+│   ├── yfinance_tools.py          # Price history & news (anchored to as-of date)
+│   ├── metrics_tools.py           # Annualised return, volatility (paper formulas)
+│   ├── market_tools.py            # Sector info, KOSPI benchmark, peer tickers
+│   └── macro_tools.py             # KRW/USD, US yields, global indices, commodities
 │
 ├── debate/
-│   └── debate_manager.py        # 5-agent round-robin debate + majority vote orchestration
+│   └── debate_manager.py          # 5-agent round-robin debate + majority vote
+│
+├── orchestrator/
+│   └── orchestrator_agent.py      # Pipeline director: fetch → debate → portfolio
+│                                  #   → backtest → PDF
+│
+├── portfolio/
+│   └── portfolio_agent.py         # Conviction scoring + risk-profile allocation
+│
+├── backtest/
+│   ├── engine.py                  # KRX data fetcher, metrics, BacktestEngine,
+│   │                              #   plot_two_profiles()
+│   └── runner.py                  # Runs both profiles + EW/S&P500 benchmarks
 │
 ├── report/
-│   └── report_generator.py      # Structured Markdown report generator
+│   ├── report_generator.py        # Per-stock Markdown report generator
+│   ├── summary_renderer.py        # Executive Summary PDF (reportlab)
+│   └── summary_renderer_demo.py   # Standalone demo with mock data
 │
-└── reports/                     # Auto-created on first run
-    ├── 005930_averse_YYYYMMDD_HHMM.md
-    └── 005930_neutral_YYYYMMDD_HHMM.md
+└── reports/                       # Auto-created on first run
+    ├── 214150_클래시스_2025-06-01_averse.md
+    ├── 214150_클래시스_2025-06-01_neutral.md
+    ├── 214150_클래시스_2025-06-01_signals.json
+    └── Exec Sum_2025-06-01.pdf
 ```
 
 ---
@@ -175,7 +218,6 @@ pip3 install -r requirements.txt
 
 ### 3. Configure API keys
 
-Copy the example file and fill in your three keys:
 ```bash
 cp .env.example .env
 ```
@@ -200,22 +242,65 @@ DART_API_KEY=your_opendart_key
 python3 main.py
 ```
 
-You will be prompted:
+### [N] New Analysis
+
 ```
-============================================================
-  AlphaAgents — Korean Equity Analysis
-============================================================
+  [N] New analysis        — fetch data, run agents, save signals
+  [L] Load saved signals  — skip analysis, go straight to portfolio & backtest
+  [C] Convert MD reports  — convert existing .md reports to signal JSON files
 
-  Enter stock ticker (e.g. 005930):
+  Choice (N / L / C): N
+
+  Enter analysis date (YYYY/MM/DD) — all stocks will be analysed using data prior to this date: 2025/06/01
+
+  Stock #1
+  Enter stock ticker (e.g. 005930): 214150
+  → Looking up company on OpenDART...
+  → Confirmed: (주)클래시스  (214150)
+  → [1/2] Fetching data...
+  → [2/2] Running debates (both profiles in parallel)...
+  → [RISK-AVERSE  ] BUY   conviction=0.920  (unanimous, 0 round(s))
+  → [RISK-NEUTRAL ] BUY   conviction=0.880  (unanimous, 0 round(s))
+
+  Add another stock to the pool? (Y/N): Y
+  ...
+
+  Automatically starting backtest...
+  Enter backtest end date (YYYY/MM/DD) [must be after 2025-06-01]: 2026/01/01
+
+  Generating executive summary PDF...
+  [PDF] Saved → reports/Exec Sum_2025-06-01.pdf
 ```
 
-Type a 6-digit KRX stock code and press Enter. The system will:
+### [L] Load Saved Signals
 
-1. **Lookup** the company on OpenDART (auto-resolves stock code → corp code)
-2. **Fetch** financial statements (FY current + prior year via OpenDART)
-3. **Fetch** price history, news, sector info, and macro indicators (via yfinance)
-4. **Run** Risk-Averse and Risk-Neutral agent debates **in parallel**
-5. **Save** two Markdown reports to `reports/` and print a terminal summary
+Skip the full analysis and go straight to portfolio construction and backtesting using previously saved `_signals.json` files:
+
+```
+  Choice (N / L / C): L
+
+  Saved signal files (5 found):
+  [ 1] 086900  (주)메디톡스  (as_of 2025-06-01)
+  [ 2] 145020  휴젤(주)      (as_of 2025-06-01)
+  ...
+
+  Enter file numbers to load (e.g. 1  or  1,3,4): 1,2,3,4,5
+```
+
+### [C] Convert MD Reports
+
+If you have existing `.md` reports from before the signal JSON feature was added, convert them without re-running the analysis:
+
+```
+  Choice (N / L / C): C
+
+  Found 5 convertible MD report pair(s):
+  [ 1] 086900  (주)메디톡스  (data as-of: 2025-06-01)
+  ...
+
+  Convert all? (A) or enter numbers (e.g. 1,3): A
+  → Converted: 086900 → reports/086900_메디톡스_2025-06-01_signals.json
+```
 
 ### Example tickers
 
@@ -224,44 +309,10 @@ Type a 6-digit KRX stock code and press Enter. The system will:
 | `005930` | 삼성전자 (Samsung Electronics) | Technology |
 | `000660` | SK하이닉스 (SK Hynix) | Technology |
 | `035420` | NAVER | Communication Services |
-| `035720` | 카카오 (Kakao) | Communication Services |
-| `005380` | 현대자동차 (Hyundai Motor) | Consumer Cyclical |
 | `068270` | 셀트리온 (Celltrion) | Healthcare |
-| `105560` | KB금융 (KB Financial) | Financial Services |
-
----
-
-## Output
-
-Two Markdown reports are saved per run, one per risk profile:
-
-```
-reports/005930_averse_20260427_1430.md
-reports/005930_neutral_20260427_1430.md
-```
-
-Each report contains:
-
-| Section | Content |
-|---|---|
-| Header | Company name, ticker, CEO, analysis date, risk profile |
-| Final Recommendation | **BUY / SELL** with consensus type and rounds used |
-| Agent Signals Table | Initial signal → final signal per agent, flagging position changes |
-| Key Valuation Metrics | Current price, period return, annualised return & volatility, volume |
-| Detailed Agent Analyses | Full written analysis from each of the 5 agents (initial round) |
-| Debate Log | Complete round-by-round exchange showing how positions evolved |
-
-### Terminal summary example
-```
-============================================================
- RESULTS — 삼성전자 (005930)
-============================================================
- Risk-Averse  : SELL  (Unanimous, 0 round(s))
-   Report: reports/005930_averse_20260427_1430.md
- Risk-Neutral : BUY   (Majority, 3 round(s))
-   Report: reports/005930_neutral_20260427_1430.md
-============================================================
-```
+| `086900` | 메디톡스 | Healthcare |
+| `145020` | 휴젤 | Healthcare |
+| `214150` | 클래시스 | Healthcare |
 
 ---
 
@@ -269,62 +320,55 @@ Each report contains:
 
 | Role | Model | Provider |
 |---|---|---|
-| Primary | `claude-sonnet-4-6` | Anthropic |
-| Fallback (auto) | `gpt-4o` | OpenAI |
+| Primary (all agents + narrative) | `claude-sonnet-4-6` | Anthropic |
+| Fallback (auto, per agent) | `gpt-4o` | OpenAI |
 
 - If a Claude API call fails for any agent, the system transparently retries with GPT-4o
-- Each agent operates independently — no shared memory or state between agents within a round
-- Debate context is passed as explicit text, not implicit shared state, preserving full transparency
-
-### Prompt Engineering — Debate Quality
-
-Two shared constants in `base_agent.py` are injected into every agent's prompts to improve analytical depth and genuine disagreement:
-
-| Constant | Injected into | Purpose |
-|---|---|---|
-| `STEELMAN_INSTRUCTION` | `analyze()` — Round 0 | Forces each agent to construct the strongest possible opposing argument before finalising its recommendation |
-| `CHALLENGE_INSTRUCTION` | `update_position()` — Rounds 1–3 | Forces each agent to cite specific conflicting claims from peer analyses and explain why they are wrong — passive agreement is rejected |
-
-These two instructions are profile-agnostic — they apply identically to risk-averse and risk-neutral agents. The risk profile only controls how evidence is *weighted*, not the rigour of the reasoning process.
-
----
-
-## Key Metrics (from the paper)
-
-**Annualised Cumulative Return**
-
-$$R_{\text{annualized}} = \left(1 + R_{\text{cumulative}}\right)^{\frac{252}{n}} - 1$$
-
-where $n$ = number of trading days in the window.
-
-**Annualised Volatility**
-
-$$\sigma_{\text{annualized}} = \sigma_{\text{daily}} \times \sqrt{252}$$
+- Each agent operates independently — no shared memory or state within a round
+- Debate context is passed as explicit text, preserving full transparency
 
 ---
 
 ## Macro Indicators Tracked
 
-| Indicator | Ticker | Relevance to Korean Equities |
+| Indicator | Ticker | Relevance |
 |---|---|---|
-| USD/KRW | `KRW=X` | Weaker KRW boosts export revenues; stronger KRW pressures them |
-| KOSPI | `^KS11` | Benchmark for Korean large-cap performance |
-| KOSDAQ | `^KQ11` | Benchmark for Korean tech/growth equities |
-| S&P 500 | `^GSPC` | Global risk appetite; divergence from KOSPI signals Korea-specific risk |
-| NASDAQ | `^IXIC` | Relevant for tech-sector correlation |
-| US 10Y Treasury | `^TNX` | Higher yields attract capital away from EM markets including Korea |
-| Gold | `GC=F` | Safe-haven flows; inversely correlated with risk appetite |
-| Crude Oil (WTI) | `CL=F` | Cost input for industrials; geopolitical risk proxy |
+| USD/KRW | `KRW=X` | Weaker KRW boosts export revenues |
+| KOSPI | `^KS11` | Korean large-cap benchmark |
+| KOSDAQ | `^KQ11` | Korean tech/growth benchmark |
+| S&P 500 | `^GSPC` | Global risk appetite |
+| NASDAQ | `^IXIC` | Tech-sector correlation |
+| US 10Y Treasury | `^TNX` | EM capital flow pressure |
+| Gold | `GC=F` | Safe-haven demand |
+| Crude Oil (WTI) | `CL=F` | Input cost / geopolitical proxy |
+
+---
+
+## Key Formulas
+
+**Annualised Cumulative Return**
+
+$$R_{\text{annualized}} = \left(1 + R_{\text{cumulative}}\right)^{\frac{252}{n}} - 1$$
+
+**Annualised Volatility**
+
+$$\sigma_{\text{annualized}} = \sigma_{\text{daily}} \times \sqrt{252}$$
+
+**Conviction Score**
+
+$$\text{conviction} = \left(\sum_{i \in \text{agree}} w_i\right) \times 0.6 + \left(1 - \frac{r}{R_{\max}}\right) \times 0.4$$
+
+where $w_i$ = agent weight, $r$ = rounds taken, $R_{\max}$ = 3.
 
 ---
 
 ## Limitations
 
-- **News coverage:** yfinance news is sparse for smaller KOSPI/KOSDAQ stocks. The Sentiment Agent may receive limited data for mid/small-cap names.
+- **News coverage:** yfinance news is sparse for smaller KOSPI/KOSDAQ stocks. The SentimentAgent may receive limited data for mid/small-cap names.
 - **Financial data lag:** OpenDART financials reflect the most recently filed annual report — typically the prior completed fiscal year.
-- **Industry peer mapping:** Sector peer tickers are predefined for major Korean sectors. Niche or cross-sector companies may not have ideal peer comparisons.
-- **No portfolio optimisation:** This system outputs BUY/SELL signals only. Portfolio construction, weighting, and diversification are out of scope.
-- **LLM hallucination:** Despite the multi-agent debate mechanism — which demonstrably reduces hallucination (Du et al., 2023) — outputs should be treated as research assistance, not financial advice.
+- **KRX login warning:** pykrx prints a login warning on startup — this is cosmetic and does not affect data fetching.
+- **Peer mapping:** Sector peer tickers are predefined for major Korean sectors. Niche or cross-sector companies may lack ideal comparisons.
+- **LLM outputs:** Despite the multi-agent debate mechanism (which demonstrably reduces hallucination — Du et al., 2023), all outputs should be treated as research assistance, not financial advice.
 
 ---
 
@@ -347,4 +391,4 @@ $$\sigma_{\text{annualized}} = \sigma_{\text{daily}} \times \sqrt{252}$$
 
 ---
 
-*Built with Claude (Anthropic) · OpenAI · OpenDART · yfinance*
+*Built with Claude (Anthropic) · OpenAI · OpenDART · pykrx · yfinance · reportlab*

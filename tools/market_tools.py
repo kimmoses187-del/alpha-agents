@@ -1,4 +1,5 @@
 import yfinance as yf
+from datetime import datetime, timedelta
 
 # Sector → representative Korean peer tickers (KOSPI .KS)
 # Used to fetch peer comparison data for the Market Agent
@@ -35,10 +36,18 @@ def get_company_sector_info(ticker_obj: yf.Ticker) -> dict:
     }
 
 
-def get_kospi_return(period: str = "3mo") -> float | None:
-    """Return KOSPI index 3-month return as a percentage."""
+def _date_range(as_of_date: datetime, months: int = 3) -> tuple[str, str]:
+    """Return (start_str, end_str) for a `months`-month window ending on as_of_date."""
+    start = as_of_date - timedelta(days=30 * months)
+    end   = as_of_date + timedelta(days=1)   # yfinance end is exclusive
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
+def get_kospi_return(as_of_date: datetime, months: int = 3) -> float | None:
+    """Return KOSPI index return for `months` months ending on as_of_date."""
     try:
-        hist = yf.Ticker("^KS11").history(period=period)
+        start, end = _date_range(as_of_date, months)
+        hist = yf.Ticker("^KS11").history(start=start, end=end)
         if not hist.empty:
             return round((hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100, 2)
     except Exception:
@@ -46,15 +55,17 @@ def get_kospi_return(period: str = "3mo") -> float | None:
     return None
 
 
-def get_peer_comparison(ticker_str: str, sector: str, period: str = "3mo") -> list:
-    """Fetch basic return and valuation for up to 3 sector peers."""
+def get_peer_comparison(ticker_str: str, sector: str,
+                        as_of_date: datetime, months: int = 3) -> list:
+    """Fetch basic return and valuation for up to 3 sector peers ending on as_of_date."""
+    start, end = _date_range(as_of_date, months)
     candidates = [t for t in KOREAN_SECTOR_PEERS.get(sector, []) if t != ticker_str]
     peers = []
     for pt in candidates[:3]:
         try:
             t    = yf.Ticker(pt)
             info = t.info
-            hist = t.history(period=period)
+            hist = t.history(start=start, end=end)
             ret  = None
             if not hist.empty:
                 ret = round((hist["Close"].iloc[-1] / hist["Close"].iloc[0] - 1) * 100, 2)

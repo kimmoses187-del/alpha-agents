@@ -1,155 +1,470 @@
-import sys
+import glob
+import json
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+import sys
 from datetime import datetime
 
-from tools.dart_tools import lookup_company, fetch_financial_statements, format_financial_data
-from tools.yfinance_tools import get_yfinance_ticker, fetch_price_history, fetch_news, format_news_for_llm
-from tools.metrics_tools import calculate_price_metrics, format_metrics_for_llm
-from tools.market_tools import get_company_sector_info, get_kospi_return, get_peer_comparison, format_market_data_for_llm
-from tools.macro_tools import fetch_macro_indicators, format_macro_data_for_llm
-from debate.debate_manager import DebateManager
-from report.report_generator import generate_report
+from tools.dart_tools import lookup_company
+from orchestrator.orchestrator_agent import OrchestratorAgent
 
 REPORTS_DIR = "reports"
-PROFILES = ("risk-averse", "risk-neutral")
 
 
-def _run_profile(profile: str, company_name: str, corp_info: dict,
-                 fundamental_data: str, sentiment_data: str,
-                 valuation_data: str, market_data: str, macro_data: str,
-                 metrics: dict, ticker_str: str, stock_code: str) -> dict:
-    """Run the full debate + report pipeline for one risk profile."""
-    print(f"\n  [{profile.upper()}] Starting multi-agent debate...")
+def _ask_date(prompt: str) -> datetime:
+    while True:
+        raw = input(prompt).strip()
+        try:
+            return datetime.strptime(raw, "%Y/%m/%d")
+        except ValueError:
+            print("  Invalid format. Please use YYYY/MM/DD (e.g. 2024/02/01).")
 
-    manager = DebateManager(risk_profile=profile)
-    debate_result = manager.run(
-        company_name=company_name,
-        fundamental_data=fundamental_data,
-        sentiment_data=sentiment_data,
-        valuation_data=valuation_data,
-        market_data=market_data,
-        macro_data=macro_data,
+
+# ── Load-saved-signals flow ───────────────────────────────────────────────────
+
+def _list_signal_files() -> list[str]:
+    """Return sorted list of *signals*.json files in the reports folder."""
+    return sorted(glob.glob(os.path.join(REPORTS_DIR, "*signals*.json")))
+
+
+def _load_signals_flow() -> tuple[dict, datetime]:
+    """
+    Let the user pick saved signal JSON files and reconstruct all_results.
+    Returns (all_results, as_of_date) ready to pass straight into finalize().
+    """
+    files = _list_signal_files()
+    if not files:
+        print(f"\n  No saved signal files found in '{REPORTS_DIR}/'.")
+        print("  Run a new analysis first to generate signal files.")
+        sys.exit(1)
+
+    print(f"\n  Saved signal files ({len(files)} found):")
+    for i, path in enumerate(files):
+        # Quick-peek at the JSON header so we can show useful info
+        try:
+            with open(path, encoding="utf-8") as f:
+                meta = json.load(f)
+            label = (f"  [{i+1:>2}] {meta['stock_code']}  "
+                     f"{meta['company_name']}  "
+                     f"(as_of {meta['as_of_date']})")
+        except Exception:
+            label = f"  [{i+1:>2}] {os.path.basename(path)}"
+        print(label)
+
+    print()
+    while True:
+        raw = input("  Enter file numbers to load (e.g. 1  or  1,3,4): ").strip()
+        try:
+            indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip()]
+            if not indices:
+                raise ValueError
+            break
+        except ValueError:
+            print("  Invalid input — enter comma-separated numbers from the list.")
+
+    all_results = {}
+    as_of_date  = None
+
+    for idx in indices:
+        if not (0 <= idx < len(files)):
+            print(f"  Skipping out-of-range index {idx + 1}.")
+            continue
+        try:
+            with open(files[idx], encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            print(f"  Could not read {files[idx]}: {e}. Skipping.")
+            continue
+
+        stock_code = data["stock_code"]
+        if stock_code in all_results:
+            print(f"  {stock_code} already loaded — skipping duplicate.")
+            continue
+
+        file_date = datetime.strptime(data["as_of_date"], "%Y-%m-%d")
+        if as_of_date is None:
+            as_of_date = file_date
+        elif as_of_date != file_date:
+            print(f"  Warning: {stock_code} has a different as_of_date "
+                  f"({data['as_of_date']} vs {as_of_date.strftime('%Y-%m-%d')}). "
+                  f"Using the first date.")
+
+        all_results[stock_code] = {
+            "company_name":   data["company_name"],
+            "corp_info":      data["corp_info"],
+            "debate_results": data["debate_results"],
+            "report_files":   data["report_files"],
+            "data":           {},   # not needed for finalize()
+        }
+        print(f"  Loaded: {stock_code} — {data['company_name']}  (as_of {data['as_of_date']})")
+
+    if not all_results:
+        print("  No signals loaded. Exiting.")
+        sys.exit(1)
+
+    return all_results, as_of_date
+
+
+# ── MD-to-JSON converter ─────────────────────────────────────────────────────
+
+_AGENTS = ["FundamentalAgent", "SentimentAgent", "ValuationAgent",
+           "MarketAgent", "MacroAgent"]
+
+_PROFILE_TAG = {"averse": "risk-averse", "neutral": "risk-neutral"}
+
+
+def _parse_md(path: str) -> dict:
+    """
+    Parse an AlphaAgents markdown report and return a structured dict:
+      {
+        "company_name": str,
+        "stock_code":   str,
+        "analysis_date": datetime,
+        "profile":      "risk-averse" | "risk-neutral",
+        "final_signal": "BUY" | "SELL",
+        "consensus_type": "unanimous" | "majority",
+        "consensus_round": int,
+        "initial_signals": {agent: signal, ...},
+        "final_signals":   {agent: signal, ...},
+      }
+    Raises ValueError if key fields cannot be parsed.
+    """
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+
+    def _first(pattern, flags=0):
+        m = re.search(pattern, text, flags)
+        if not m:
+            raise ValueError(f"Pattern not found in {path}: {pattern!r}")
+        return m.group(1).strip()
+
+    company_name   = _first(r"\|\s*\*\*Company\*\*\s*\|\s*(.+?)\s*\|")
+    stock_code     = _first(r"\|\s*\*\*Stock Code\*\*\s*\|\s*(\d+)\s*\|")
+    date_str       = _first(r"\|\s*\*\*Analysis Date\*\*\s*\|\s*(.+?)\s*\|")
+    profile_raw    = _first(r"\|\s*\*\*Risk Profile\*\*\s*\|\s*(.+?)\s*\|")
+    final_signal   = _first(r"##\s*Final Recommendation:\s*\*\*(\w+)\*\*")
+    consensus_raw  = _first(r"Consensus type:\s*\*\*(\w+)\*\*")
+    rounds_str     = _first(r"Reached after:\s*\*\*(\d+)\*\*")
+
+    # Normalise analysis date (actual run timestamp — kept for reference)
+    try:
+        analysis_date = datetime.strptime(date_str, "%Y-%m-%d %H:%M")
+    except ValueError:
+        analysis_date = datetime.strptime(date_str[:10], "%Y-%m-%d")
+
+    # User-supplied data as-of date (present in newer MD files via "Data As-Of" row)
+    m_aod = re.search(r"\|\s*\*\*Data As-Of\*\*\s*\|\s*(.+?)\s*\|", text)
+    data_as_of: datetime | None = None
+    if m_aod:
+        raw_aod = m_aod.group(1).strip()
+        if raw_aod and raw_aod != "N/A":
+            try:
+                data_as_of = datetime.strptime(raw_aod, "%Y-%m-%d")
+            except ValueError:
+                pass
+
+    profile = "risk-averse" if "averse" in profile_raw.lower() else "risk-neutral"
+    consensus_type = consensus_raw.lower()          # "unanimous" / "majority"
+    consensus_round = int(rounds_str)
+
+    # Agent signals table
+    # Header line: | Agent | Initial Signal | Final Signal | Changed? |
+    # Data lines:  | FundamentalAgent | SELL | SELL | No |
+    table_block = re.search(
+        r"\|\s*Agent\s*\|.*?Initial Signal.*?\|.*?\n((?:\|.+\|\n?)+)",
+        text, re.IGNORECASE
     )
+    if not table_block:
+        raise ValueError(f"Agent signals table not found in {path}")
 
-    report_md = generate_report(debate_result, corp_info, metrics, ticker_str, profile)
-
-    os.makedirs(REPORTS_DIR, exist_ok=True)
-    profile_tag = "neutral" if profile == "risk-neutral" else "averse"
-    timestamp   = datetime.now().strftime("%Y%m%d_%H%M")
-    filename    = os.path.join(REPORTS_DIR, f"{stock_code}_{profile_tag}_{timestamp}.md")
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write(report_md)
+    initial_signals: dict[str, str] = {}
+    final_signals:   dict[str, str] = {}
+    for row in table_block.group(1).splitlines():
+        cols = [c.strip() for c in row.split("|") if c.strip()]
+        if len(cols) < 3:
+            continue
+        agent, initial, final = cols[0], cols[1].upper(), cols[2].upper()
+        if agent in _AGENTS:
+            initial_signals[agent] = initial
+            final_signals[agent]   = final
 
     return {
-        "profile":        profile,
-        "signal":         debate_result["final_signal"],
-        "consensus_type": debate_result["consensus_type"],
-        "rounds":         debate_result["consensus_round"],
-        "filename":       filename,
+        "company_name":    company_name,
+        "stock_code":      stock_code,
+        "analysis_date":   analysis_date,   # actual run timestamp
+        "data_as_of":      data_as_of,      # user-typed date (None if old file)
+        "profile":         profile,
+        "final_signal":    final_signal.upper(),
+        "consensus_type":  consensus_type,
+        "consensus_round": consensus_round,
+        "initial_signals": initial_signals,
+        "final_signals":   final_signals,
     }
 
 
-def run(stock_code: str) -> None:
-    print(f"\n{'='*60}")
-    print(f" AlphaAgents — Korean Equity Analysis")
-    print(f" Stock Code  : {stock_code}")
-    print(f" Profiles    : Risk-Averse  |  Risk-Neutral")
-    print(f"{'='*60}")
+def _build_debate_result(parsed: dict) -> dict:
+    """
+    Reconstruct the debate_result dict expected by portfolio_agent / finalize()
+    from the fields extracted by _parse_md().
+    """
+    def _results_list(signal_map: dict) -> list:
+        return [{"agent": a, "signal": signal_map.get(a, "SELL"), "analysis": ""}
+                for a in _AGENTS]
 
-    # ── Step 1: DART company lookup ───────────────────────────────────────
-    print("\n[1/3] Looking up company on OpenDART...")
-    corp_info    = lookup_company(stock_code)
-    corp_code    = corp_info["corp_code"]
-    company_name = corp_info["corp_name"]
-    print(f"  Found: {company_name}  (corp_code: {corp_code})")
+    debate_log = [
+        {"round": 0, "label": "Independent Analysis",
+         "results": _results_list(parsed["initial_signals"])},
+    ]
+    if parsed["consensus_round"] > 0:
+        debate_log.append({
+            "round": parsed["consensus_round"],
+            "label": f"Debate Round {parsed['consensus_round']}",
+            "results": _results_list(parsed["final_signals"]),
+        })
 
-    # ── Step 2: Fetch all data (once, shared by both profiles) ───────────
-    print("\n[2/3] Fetching data...")
+    return {
+        "company_name":    parsed["company_name"],
+        "final_signal":    parsed["final_signal"],
+        "consensus_type":  parsed["consensus_type"],
+        "consensus_round": parsed["consensus_round"],
+        "debate_log":      debate_log,
+    }
 
-    current_year = datetime.now().year - 1
-    print(f"  DART: fetching financials for FY{current_year} and FY{current_year - 1}...")
-    fs_current = fetch_financial_statements(corp_code, current_year)
-    fs_prev    = fetch_financial_statements(corp_code, current_year - 1)
-    fundamental_data = format_financial_data(corp_info, fs_current, fs_prev)
 
-    print("  yfinance: detecting exchange and fetching price history + news...")
-    ticker_obj, ticker_str = get_yfinance_ticker(stock_code)
-    price_history  = fetch_price_history(ticker_obj, period="3mo")
-    news_items     = fetch_news(ticker_obj)
-    metrics        = calculate_price_metrics(price_history)
-    sentiment_data = format_news_for_llm(news_items)
-    valuation_data = format_metrics_for_llm(metrics, ticker_str)
+def _find_md_pairs() -> list[dict]:
+    """
+    Scan REPORTS_DIR for *_averse_*.md + matching *_neutral_*.md pairs.
+    Returns a list of dicts: {stock_code, timestamp, averse_path, neutral_path}.
+    """
+    averse_files = glob.glob(os.path.join(REPORTS_DIR, "*_averse*.md"))
+    pairs = []
+    seen = set()
+    for averse in sorted(averse_files):
+        base = os.path.basename(averse)
+        # New format: 086900_메디톡스_2025-06-01_averse.md
+        # Old format: 086900_averse_20260501_1106.md
+        m_new = re.match(r"^(\d+)_(.+)_(\d{4}-\d{2}-\d{2})_averse\.md$", base)
+        m_old = re.match(r"^(\d+)_averse_(\d{8}_\d{4})\.md$", base)
 
-    # Market & industry data
-    print("  Fetching sector/industry and peer comparison data...")
-    sector_info  = get_company_sector_info(ticker_obj)
-    kospi_return = get_kospi_return()
-    peers        = get_peer_comparison(ticker_str, sector_info.get("sector", ""))
-    market_data  = format_market_data_for_llm(sector_info, kospi_return, peers, company_name)
+        if m_new:
+            stock_code = m_new.group(1)
+            corp_name  = m_new.group(2)
+            date_part  = m_new.group(3)
+            neutral    = os.path.join(
+                REPORTS_DIR, f"{stock_code}_{corp_name}_{date_part}_neutral.md"
+            )
+            key = f"{stock_code}_{date_part}"
+        elif m_old:
+            stock_code = m_old.group(1)
+            ts         = m_old.group(2)
+            corp_name  = ""
+            date_part  = ts
+            neutral    = os.path.join(REPORTS_DIR, f"{stock_code}_neutral_{ts}.md")
+            key = f"{stock_code}_{ts}"
+        else:
+            continue
 
-    # Macro data
-    print("  Fetching macroeconomic indicators...")
-    macro_indicators = fetch_macro_indicators()
-    macro_data       = format_macro_data_for_llm(macro_indicators, sector_info.get("sector", "Unknown"))
+        if key in seen or not os.path.exists(neutral):
+            continue
+        seen.add(key)
+        pairs.append({
+            "stock_code":   stock_code,
+            "timestamp":    date_part,
+            "averse_path":  averse,
+            "neutral_path": neutral,
+        })
+    return pairs
 
-    print(f"  Exchange: {ticker_str} | "
-          f"{len(price_history)} trading days | "
-          f"{len(news_items)} news items | "
-          f"{len(peers)} peers | "
-          f"{len(macro_indicators)} macro indicators")
 
-    # ── Step 3: Both profiles in parallel ────────────────────────────────
-    print(f"\n[3/3] Running both risk profiles in parallel...")
+def _convert_md_to_signals_flow() -> None:
+    """
+    Find MD report pairs, let the user pick which to convert, then
+    write *_signals_*.json files ready for [L] to load.
+    """
+    pairs = _find_md_pairs()
+    if not pairs:
+        print(f"\n  No MD report pairs found in '{REPORTS_DIR}/'.")
+        print("  Expected files like: <code>_averse_<ts>.md  +  <code>_neutral_<ts>.md")
+        return
 
-    shared_kwargs = dict(
-        company_name=company_name,
-        corp_info=corp_info,
-        fundamental_data=fundamental_data,
-        sentiment_data=sentiment_data,
-        valuation_data=valuation_data,
-        market_data=market_data,
-        macro_data=macro_data,
-        metrics=metrics,
-        ticker_str=ticker_str,
-        stock_code=stock_code,
+    print(f"\n  Found {len(pairs)} convertible MD report pair(s):\n")
+    # Pre-parse all pairs so we can show data_as_of in the list
+    parsed_pairs = []
+    for p in pairs:
+        try:
+            pav  = _parse_md(p["averse_path"])
+            pneu = _parse_md(p["neutral_path"])
+            parsed_pairs.append((p, pav, pneu))
+            aod_str = (pav["data_as_of"].strftime("%Y-%m-%d")
+                       if pav["data_as_of"] else "unknown — will ask")
+            label = (f"  [{len(parsed_pairs):>2}] {p['stock_code']}  {pav['company_name']}"
+                     f"  (data as-of: {aod_str})")
+        except Exception:
+            parsed_pairs.append((p, None, None))
+            label = f"  [{len(parsed_pairs):>2}] {p['stock_code']}  (could not parse)"
+        print(label)
+
+    print()
+    while True:
+        raw = input("  Convert all? (A) or enter numbers (e.g. 1,3): ").strip().upper()
+        if raw == "A":
+            indices = list(range(len(parsed_pairs)))
+            break
+        try:
+            indices = [int(x.strip()) - 1 for x in raw.split(",") if x.strip()]
+            if not indices:
+                raise ValueError
+            break
+        except ValueError:
+            print("  Invalid input.")
+
+    # If any selected file is missing data_as_of, ask once upfront
+    needs_date = any(
+        parsed_pairs[i][1] is not None and parsed_pairs[i][1]["data_as_of"] is None
+        for i in indices if 0 <= i < len(parsed_pairs)
+    )
+    fallback_as_of: datetime | None = None
+    if needs_date:
+        print("\n  Some MD files don't have the original analysis date stored.")
+        print("  This is the date you typed at the start of the analysis run")
+        print("  (e.g. 2025/06/01 means 'use data prior to June 1 2025').")
+        fallback_as_of = _ask_date("  Enter that date (YYYY/MM/DD): ")
+
+    converted = 0
+    for idx in indices:
+        if not (0 <= idx < len(parsed_pairs)):
+            print(f"  Skipping out-of-range index {idx + 1}.")
+            continue
+        p, parsed_av, parsed_neu = parsed_pairs[idx]
+        if parsed_av is None or parsed_neu is None:
+            print(f"  Could not parse {p['stock_code']}. Skipping.")
+            continue
+
+        as_of_date   = parsed_av["data_as_of"] or fallback_as_of
+        company_name = parsed_av["company_name"]
+        safe_name    = re.sub(r"\(주\)|\(주식회사\)|\(유\)", "", company_name)
+        safe_name    = re.sub(r"[^\w가-힣぀-ヿ一-鿿\s\-]", "", safe_name)
+        safe_name    = re.sub(r"[\s_]+", "_", safe_name.strip()).strip("_") or p["stock_code"]
+        date_tag     = as_of_date.strftime("%Y-%m-%d")
+
+        debate_results = {
+            "risk-averse":  _build_debate_result(parsed_av),
+            "risk-neutral": _build_debate_result(parsed_neu),
+        }
+        corp_info = {
+            "corp_name":  company_name,
+            "corp_code":  "",            # not needed by finalize()
+        }
+
+        signals_path = os.path.join(
+            REPORTS_DIR,
+            f"{p['stock_code']}_{safe_name}_{date_tag}_signals.json"
+        )
+        payload = {
+            "stock_code":     p["stock_code"],
+            "company_name":   company_name,
+            "as_of_date":     as_of_date.strftime("%Y-%m-%d"),
+            "corp_info":      corp_info,
+            "debate_results": debate_results,
+            "report_files": {
+                "risk-averse":  p["averse_path"],
+                "risk-neutral": p["neutral_path"],
+            },
+        }
+        with open(signals_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        print(f"  Converted: {p['stock_code']} ({company_name})  →  {signals_path}")
+        converted += 1
+
+    print(f"\n  Done — {converted} signal file(s) created.")
+    if converted:
+        print("  You can now run [L] to load them without re-analysing.\n")
+
+
+# ── New-analysis flow ─────────────────────────────────────────────────────────
+
+def _new_analysis_flow(orchestrator: OrchestratorAgent) -> tuple[dict, datetime]:
+    """Full stock-pool loop: ask date, analyze stocks one by one."""
+    as_of_date = _ask_date(
+        "\n  Enter analysis date (YYYY/MM/DD)"
+        " — all stocks will be analysed using data prior to this date: "
     )
 
-    results = {}
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {
-            pool.submit(_run_profile, profile, **shared_kwargs): profile
-            for profile in PROFILES
-        }
-        for future in as_completed(futures):
-            profile = futures[future]
-            try:
-                results[profile] = future.result()
-            except Exception as exc:
-                print(f"  [{profile}] FAILED: {exc}")
-                results[profile] = {"profile": profile, "signal": "ERROR", "error": str(exc)}
+    all_results = {}
 
-    # ── Summary ───────────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f" RESULTS — {company_name} ({stock_code})")
-    print(f"{'='*60}")
-    for profile in PROFILES:
-        r = results.get(profile, {})
-        if r.get("signal") == "ERROR":
-            print(f" {profile.title():<14}: ERROR — {r.get('error')}")
-        else:
-            print(f" {profile.title():<14}: {r['signal']:<4}  "
-                  f"({r['consensus_type'].title()}, {r['rounds']} round(s))")
-            print(f"   Report: {r['filename']}")
-    print(f"{'='*60}\n")
+    while True:
+        n = len(all_results) + 1
+        print(f"\n{'─'*60}")
+        print(f"  Stock #{n}  ({len(all_results)} in pool so far)")
+        print(f"{'─'*60}")
+
+        stock_code = input("  Enter stock ticker (e.g. 005930): ").strip()
+        if not stock_code:
+            if not all_results:
+                print("  No stocks entered. Exiting.")
+                sys.exit(1)
+            print("  Empty input — ending stock entry.")
+            break
+
+        if stock_code in all_results:
+            print(f"  {stock_code} is already in the pool. Skipping.")
+            continue
+
+        print("  Looking up company on OpenDART...")
+        try:
+            corp_info = lookup_company(stock_code)
+        except Exception as e:
+            print(f"  Error: {e}. Skipping.")
+            continue
+        print(f"  Confirmed: {corp_info['corp_name']}  ({stock_code})")
+
+        result = orchestrator.analyze_stock(stock_code, as_of_date, corp_info)
+        all_results[stock_code] = result
+
+        more = input(
+            f"\n  Add another stock to the pool? (Y/N)"
+            f"  [{len(all_results)} stock(s) analysed]: "
+        ).strip().upper()
+        if more != "Y":
+            break
+
+    return all_results, as_of_date
 
 
-if __name__ == "__main__":
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main() -> None:
     print("\n" + "="*60)
     print("  AlphaAgents — Korean Equity Analysis")
     print("="*60)
-    stock_code = input("\n  Enter stock ticker (e.g. 005930): ").strip()
-    if not stock_code:
-        print("  No ticker entered. Exiting.")
-        sys.exit(1)
-    run(stock_code)
+    print("\n  [N] New analysis        — fetch data, run agents, save signals")
+    print("  [L] Load saved signals  — skip analysis, go straight to portfolio & backtest")
+    print("  [C] Convert MD reports  — convert existing .md reports to signal JSON files")
+
+    while True:
+        choice = input("\n  Choice (N / L / C): ").strip().upper()
+        if choice in ("N", "L", "C"):
+            break
+        print("  Please enter N, L, or C.")
+
+    if choice == "C":
+        _convert_md_to_signals_flow()
+        return
+
+    orchestrator = OrchestratorAgent()
+
+    if choice == "L":
+        all_results, as_of_date = _load_signals_flow()
+        print(f"\n  {len(all_results)} stock(s) loaded. "
+              f"Proceeding to portfolio construction and backtest...")
+    else:
+        all_results, as_of_date = _new_analysis_flow(orchestrator)
+        print(f"\n  {len(all_results)} stock(s) analysed. "
+              f"Proceeding to portfolio construction and backtest...")
+
+    orchestrator.finalize(all_results, as_of_date)
+
+
+if __name__ == "__main__":
+    main()

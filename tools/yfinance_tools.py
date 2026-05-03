@@ -17,20 +17,23 @@ def get_yfinance_ticker(stock_code: str) -> tuple:
     )
 
 
-def fetch_price_history(ticker: yf.Ticker, period: str = "3mo") -> pd.DataFrame:
-    """Fetch OHLCV price history."""
-    return ticker.history(period=period)
+def fetch_price_history(ticker: yf.Ticker, as_of_date: datetime, months: int = 3) -> pd.DataFrame:
+    """Fetch OHLCV price history for `months` months ending on as_of_date."""
+    start = as_of_date - timedelta(days=30 * months)
+    end   = as_of_date + timedelta(days=1)   # yfinance end is exclusive
+    return ticker.history(start=start.strftime("%Y-%m-%d"), end=end.strftime("%Y-%m-%d"))
 
 
-def fetch_news(ticker: yf.Ticker, max_items: int = 10, months: int = 3) -> list:
-    """Fetch recent news articles within the last `months` months."""
+def fetch_news(ticker: yf.Ticker, as_of_date: datetime,
+               max_items: int = 10, months: int = 3) -> list:
+    """Fetch news articles published within `months` months before as_of_date."""
     try:
         news = ticker.news or []
-        cutoff = datetime.now() - timedelta(days=30 * months)
-        cutoff_ts = cutoff.timestamp()
+        cutoff_ts  = (as_of_date - timedelta(days=30 * months)).timestamp()
+        as_of_ts   = as_of_date.timestamp()
         filtered = [
             item for item in news
-            if item.get("providerPublishTime", 0) >= cutoff_ts
+            if cutoff_ts <= item.get("providerPublishTime", 0) <= as_of_ts
         ]
         return filtered[:max_items]
     except Exception:

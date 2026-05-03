@@ -100,7 +100,8 @@ def fetch_financial_statements(corp_code: str, year: int, reprt_code: str = "110
     return data
 
 
-def format_financial_data(corp_info: dict, fs_current: dict, fs_prev: dict) -> str:
+def format_financial_data(corp_info: dict, fs_current: dict, fs_prev: dict,
+                          current_year: int) -> str:
     """Format DART data into readable text for LLM analysis."""
     lines = []
 
@@ -133,7 +134,6 @@ def format_financial_data(corp_info: dict, fs_current: dict, fs_prev: dict) -> s
 
         return "\n".join(section) + "\n"
 
-    current_year = datetime.now().year - 1
     lines.append(_format_fs(fs_current, f"FY{current_year}"))
     lines.append(_format_fs(fs_prev, f"FY{current_year - 1}"))
 

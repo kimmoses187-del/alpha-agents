@@ -3,7 +3,9 @@ from datetime import datetime
 
 def generate_report(debate_result: dict, corp_info: dict,
                     metrics: dict, ticker_str: str,
-                    risk_profile: str = "risk-averse") -> str:
+                    risk_profile: str = "risk-averse",
+                    portfolio: dict | None = None,
+                    as_of_date: datetime | None = None) -> str:
     """Produce a structured Markdown report from debate results."""
 
     company_name   = debate_result["company_name"]
@@ -30,6 +32,7 @@ def generate_report(debate_result: dict, corp_info: dict,
         f"| **Ticker (yfinance)** | {ticker_str} |",
         f"| **CEO** | {corp_info.get('ceo_nm', 'N/A')} |",
         f"| **Analysis Date** | {datetime.now().strftime('%Y-%m-%d %H:%M')} |",
+        f"| **Data As-Of** | {as_of_date.strftime('%Y-%m-%d') if as_of_date else 'N/A'} |",
         f"| **Risk Profile** | {risk_profile.title()} |",
         "",
     ]
@@ -74,6 +77,26 @@ def generate_report(debate_result: dict, corp_info: dict,
             f"| Avg Daily Volume | {metrics.get('avg_daily_volume', 0):,.0f} shares |",
             f"| 3M High | {metrics.get('price_high', 'N/A'):,} KRW |",
             f"| 3M Low | {metrics.get('price_low', 'N/A'):,} KRW |",
+            "",
+        ]
+
+    # ── Portfolio Allocation ──────────────────────────────────────────────
+    if portfolio:
+        from portfolio.portfolio_agent import BOND_TICKER
+        action = "Position taken" if portfolio.get("position_taken") else "No position — capital preserved (100% bond)"
+        lines += [
+            "---",
+            "## Portfolio Allocation",
+            "",
+            f"| Field | Value |",
+            f"|-------|-------|",
+            f"| **Signal** | {portfolio.get('signal', 'N/A')} |",
+            f"| **Conviction Score** | {portfolio.get('conviction', 'N/A')} |",
+            f"| **Equity Weight** | {portfolio.get('equity_weight', 0)*100:.0f}% |",
+            f"| **Bond Weight (KODEX 국고채3년)** | {portfolio.get('bond_weight', 0)*100:.0f}% |",
+            f"| **Stop-Loss** | {portfolio.get('stop_loss', 0)*100:.0f}% |",
+            f"| **Take-Profit** | +{portfolio.get('take_profit', 0)*100:.0f}% |",
+            f"| **Action** | {action} |",
             "",
         ]
 

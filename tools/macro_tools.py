@@ -1,4 +1,5 @@
 import yfinance as yf
+from datetime import datetime, timedelta
 
 # Key macro indicators fetchable via yfinance
 MACRO_TICKERS: dict = {
@@ -13,12 +14,14 @@ MACRO_TICKERS: dict = {
 }
 
 
-def fetch_macro_indicators(period: str = "3mo") -> dict:
-    """Fetch current value and 3-month return for each macro indicator."""
+def fetch_macro_indicators(as_of_date: datetime, months: int = 3) -> dict:
+    """Fetch value and return for each macro indicator for `months` months ending on as_of_date."""
+    start_str = (as_of_date - timedelta(days=30 * months)).strftime("%Y-%m-%d")
+    end_str   = (as_of_date + timedelta(days=1)).strftime("%Y-%m-%d")
     results = {}
     for name, sym in MACRO_TICKERS.items():
         try:
-            hist = yf.Ticker(sym).history(period=period)
+            hist = yf.Ticker(sym).history(start=start_str, end=end_str)
             if hist.empty:
                 continue
             current = float(hist["Close"].iloc[-1])
