@@ -104,11 +104,11 @@ After all stocks are analysed, the **PortfolioAgent** constructs two separate po
 |---|---|---|
 | Equity allocation | 60% | 80% |
 | Bond allocation (KODEX 국고채3년 · 114260) | 40% | 20% |
-| Min conviction threshold | 0.60 | 0.35 |
 | Stop-loss | −5% | −10% |
 | Take-profit | +10% | +20% |
 
-- Stocks below the conviction threshold or with a **SELL** signal receive **0% weight**
+- Stocks with a **SELL** signal receive **0% weight**
+- All **BUY** stocks qualify for equity allocation regardless of conviction score
 - Equity weight is distributed **conviction-proportionally** across qualifying stocks
 - Remaining weight goes to the Korean 3Y Government Bond ETF
 

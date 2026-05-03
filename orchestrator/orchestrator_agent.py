@@ -166,7 +166,7 @@ class OrchestratorAgent:
             for code, alloc in po["stock_allocations"].items():
                 name   = company_names[code]
                 status = f"weight={alloc['weight']*100:.1f}%" if alloc["weight"] > 0 \
-                         else "excluded (SELL / low conviction)"
+                         else "excluded (SELL)"
                 print(f"    {code} ({name:<15}): {alloc['signal']:<4}  "
                       f"conviction={alloc['conviction']:.3f}  {status}")
             print(f"    Bond 114260 (KODEX 국고채3년): "

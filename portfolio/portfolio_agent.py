@@ -15,18 +15,16 @@ AGENT_WEIGHTS = {
 
 PROFILE_CONFIG = {
     "risk-averse": {
-        "equity_weight":  0.60,   # 60% stocks / 40% bond
-        "bond_weight":    0.40,
-        "min_conviction": 0.60,   # below this → full bond (capital preservation)
-        "stop_loss":     -0.05,
-        "take_profit":    0.10,
+        "equity_weight": 0.60,   # 60% stocks / 40% bond
+        "bond_weight":   0.40,
+        "stop_loss":    -0.05,
+        "take_profit":   0.10,
     },
     "risk-neutral": {
-        "equity_weight":  0.80,   # 80% stocks / 20% bond
-        "bond_weight":    0.20,
-        "min_conviction": 0.35,
-        "stop_loss":     -0.10,
-        "take_profit":    0.20,
+        "equity_weight": 0.80,   # 80% stocks / 20% bond
+        "bond_weight":   0.20,
+        "stop_loss":    -0.10,
+        "take_profit":   0.20,
     },
 }
 
@@ -91,7 +89,7 @@ def construct_portfolio(stock_debate_results: dict) -> dict:
     Allocation logic
     ----------------
     1. Compute conviction for every stock in each profile.
-    2. Select BUY stocks whose conviction >= min_conviction threshold.
+    2. Select all BUY stocks (no conviction threshold).
     3. Distribute the profile's equity_weight among qualifying stocks
        proportional to their conviction scores.
     4. Remaining weight goes to the Korean bond ETF (114260).
@@ -113,7 +111,7 @@ def construct_portfolio(stock_debate_results: dict) -> dict:
         buy_stocks = {
             code: convictions[code]
             for code in convictions
-            if signals[code] == "BUY" and convictions[code] >= cfg["min_conviction"]
+            if signals[code] == "BUY"
         }
 
         # Step 3: conviction-proportional weights within equity bucket
