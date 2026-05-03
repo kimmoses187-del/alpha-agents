@@ -256,7 +256,7 @@ def _draw_header_footer(canvas, doc):
     # Header text
     canvas.setFillColor(colors.white)
     canvas.setFont(KOB, 13)
-    canvas.drawString(MARGIN, H - 1.35 * cm, "AlphaAgents  —  Portfolio Executive Summary")
+    canvas.drawString(MARGIN, H - 1.35 * cm, "K-AlphaAgents  —  Portfolio Executive Summary")
 
     canvas.setFont(KO, 8)
     canvas.setFillColor(C_GOLD)
@@ -273,7 +273,7 @@ def _draw_header_footer(canvas, doc):
     canvas.setFillColor(colors.white)
     canvas.setFont(KO, 7.5)
     canvas.drawString(MARGIN, 0.42 * cm,
-                      "AlphaAgents  |  Korean Equity Multi-Agent Analysis System")
+                      "K-AlphaAgents  |  Korean Equity Multi-Agent Analysis System")
     canvas.drawRightString(W - MARGIN, 0.42 * cm, f"Page {doc.page}")
 
     canvas.restoreState()
@@ -347,8 +347,8 @@ def build_sample_pdf(out_path: str) -> str:
         pagesize=A4,
         leftMargin=MARGIN, rightMargin=MARGIN,
         topMargin=3.0 * cm, bottomMargin=1.8 * cm,
-        title="AlphaAgents — Portfolio Executive Summary (SAMPLE)",
-        author="AlphaAgents",
+        title="K-AlphaAgents — Portfolio Executive Summary (SAMPLE)",
+        author="K-AlphaAgents",
     )
     frame = Frame(MARGIN, 1.8 * cm, usable_w, H - 4.8 * cm, id="main")
     doc.addPageTemplates([PageTemplate(id="main", frames=[frame],

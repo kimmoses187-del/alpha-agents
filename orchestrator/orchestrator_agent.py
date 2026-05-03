@@ -45,7 +45,7 @@ def _safe_filename(name: str) -> str:
 
 class OrchestratorAgent:
     """
-    Director of the AlphaAgents pipeline.
+    Director of the K-AlphaAgents pipeline.
 
     Two-phase API
     -------------

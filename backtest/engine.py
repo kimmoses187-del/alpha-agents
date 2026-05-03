@@ -1,5 +1,5 @@
 """
-Backtesting Engine for AlphaAgents
+Backtesting Engine for K-AlphaAgents
 ====================================
 Key settings vs. original sample:
   - rolling_window default: 30 trading days

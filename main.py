@@ -115,7 +115,7 @@ _PROFILE_TAG = {"averse": "risk-averse", "neutral": "risk-neutral"}
 
 def _parse_md(path: str) -> dict:
     """
-    Parse an AlphaAgents markdown report and return a structured dict:
+    Parse a K-AlphaAgents markdown report and return a structured dict:
       {
         "company_name": str,
         "stock_code":   str,
@@ -436,7 +436,7 @@ def _new_analysis_flow(orchestrator: OrchestratorAgent) -> tuple[dict, datetime]
 
 def main() -> None:
     print("\n" + "="*60)
-    print("  AlphaAgents — Korean Equity Analysis")
+    print("  K-AlphaAgents — Korean Equity Analysis")
     print("="*60)
     print("\n  [N] New analysis        — fetch data, run agents, save signals")
     print("  [L] Load saved signals  — skip analysis, go straight to portfolio & backtest")

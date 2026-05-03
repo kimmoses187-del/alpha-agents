@@ -1,4 +1,4 @@
-# AlphaAgents 🤖📈
+# K-AlphaAgents 🤖📈
 ### LLM Multi-Agent System for Korean Equity Research
 
 A partial replication of **BlackRock's AlphaAgents** (Zhao et al., 2025) adapted for Korean equities (KOSPI/KOSDAQ).  
@@ -392,4 +392,4 @@ where $w_i$ = agent weight, $r$ = rounds taken, $R_{\max}$ = 3.
 
 ---
 
-*Built with Claude (Anthropic) · OpenAI · OpenDART · pykrx · yfinance · reportlab*
+*K-AlphaAgents — Built with Claude (Anthropic) · OpenAI · OpenDART · pykrx · yfinance · reportlab*
