@@ -10,23 +10,25 @@ _RISK_FREE_RATE  = 0.035   # ~KRX CD rate
 _ROLLING_WINDOW  = 30
 
 
-def _fetch_sp500(start: str, end: str) -> tuple[Optional[pd.Series], Optional[pd.Series]]:
+def _fetch_index(ticker: str, label: str,
+                 start: str, end: str
+                 ) -> tuple[Optional[pd.Series], Optional[pd.Series]]:
     """
-    Fetch S&P 500 daily returns and compute:
+    Fetch a yfinance index and compute:
       - cumulative return series
       - rolling Sharpe series (30-day window)
 
     Returns (None, None) on any failure so callers can safely skip.
     """
     try:
-        hist = yf.Ticker("^GSPC").history(start=start, end=end)
+        hist = yf.Ticker(ticker).history(start=start, end=end)
         if hist.empty:
             return None, None
         returns = hist["Close"].pct_change().dropna()
         mc      = MetricsCalculator(risk_free_rate=_RISK_FREE_RATE)
         return mc.cumulative_return(returns), mc.rolling_sharpe(returns, _ROLLING_WINDOW)
     except Exception as e:
-        print(f"[WARNING] Could not fetch S&P 500: {e}")
+        print(f"[WARNING] Could not fetch {label}: {e}")
         return None, None
 
 
@@ -39,9 +41,10 @@ def run_backtest(
     all_stock_codes: Optional[list] = None,
 ) -> dict:
     """
-    Run a separate BacktestEngine per risk profile, with two benchmarks:
+    Run a separate BacktestEngine per risk profile, with three benchmarks:
       1. Equal-weight (EW) — all analyzed stocks, regardless of signal
-      2. S&P 500            — fetched via yfinance, overlaid on the plot
+      2. KOSPI              — ^KS11 via yfinance, overlaid on the plot
+      3. KOSDAQ             — ^KQ11 via yfinance, overlaid on the plot
 
     Plotting is NOT done here — the orchestrator calls plot_two_profiles()
     directly so it can embed the figure into the PDF.
@@ -61,8 +64,10 @@ def run_backtest(
         "risk-averse":    BacktestEngine,
         "risk-neutral":   BacktestEngine,
         "summaries":      dict,
-        "sp500_cum":      pd.Series | None,
-        "sp500_rolling":  pd.Series | None,
+        "kospi_cum":      pd.Series | None,
+        "kospi_rolling":  pd.Series | None,
+        "kosdaq_cum":     pd.Series | None,
+        "kosdaq_rolling": pd.Series | None,
     }
     """
     start_str = as_of_date.strftime("%Y-%m-%d")
@@ -104,17 +109,22 @@ def run_backtest(
         summaries[profile] = profile_summaries
         engine.print_summary()
 
-    # S&P 500 benchmark series
-    sp500_cum, sp500_rolling = _fetch_sp500(start_str, end_str)
-    if sp500_cum is not None:
-        print("  [S&P 500] Benchmark fetched successfully.")
-    else:
-        print("  [S&P 500] Benchmark unavailable — will be omitted from chart.")
+    # Korean index benchmarks
+    kospi_cum,  kospi_rolling  = _fetch_index("^KS11", "KOSPI",  start_str, end_str)
+    kosdaq_cum, kosdaq_rolling = _fetch_index("^KQ11", "KOSDAQ", start_str, end_str)
+
+    for label, series in [("KOSPI", kospi_cum), ("KOSDAQ", kosdaq_cum)]:
+        if series is not None:
+            print(f"  [{label}] Benchmark fetched successfully.")
+        else:
+            print(f"  [{label}] Benchmark unavailable — will be omitted from chart.")
 
     return {
-        "risk-averse":   engines["risk-averse"],
-        "risk-neutral":  engines["risk-neutral"],
-        "summaries":     summaries,
-        "sp500_cum":     sp500_cum,
-        "sp500_rolling": sp500_rolling,
+        "risk-averse":    engines["risk-averse"],
+        "risk-neutral":   engines["risk-neutral"],
+        "summaries":      summaries,
+        "kospi_cum":      kospi_cum,
+        "kospi_rolling":  kospi_rolling,
+        "kosdaq_cum":     kosdaq_cum,
+        "kosdaq_rolling": kosdaq_rolling,
     }

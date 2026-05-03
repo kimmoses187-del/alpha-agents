@@ -250,11 +250,13 @@ def plot_two_profiles(
     neutral_engine: BacktestEngine,
     company_name: str,
     save_path: Optional[str] = None,
-    sp500_cum: Optional[pd.Series] = None,
-    sp500_rolling: Optional[pd.Series] = None,
+    kospi_cum: Optional[pd.Series] = None,
+    kospi_rolling: Optional[pd.Series] = None,
+    kosdaq_cum: Optional[pd.Series] = None,
+    kosdaq_rolling: Optional[pd.Series] = None,
 ) -> plt.Figure:
     """
-    Side-by-side 2×2 backtest figure with two benchmarks overlaid.
+    Side-by-side 2×2 backtest figure with three benchmarks overlaid.
 
     Layout
     ------
@@ -267,7 +269,8 @@ def plot_two_profiles(
     --------
     EW Benchmark — equal-weight of all analyzed stocks (added as a portfolio
                    inside the engine so KRX data is used consistently)
-    S&P 500      — passed in as pre-computed series (fetched via yfinance)
+    KOSPI        — ^KS11 via yfinance (green)
+    KOSDAQ       — ^KQ11 via yfinance (purple)
     """
     fig, axes = plt.subplots(2, 2, figsize=(16, 10), sharex="col")
     fig.suptitle(
@@ -282,10 +285,11 @@ def plot_two_profiles(
     ]
 
     # All lines are solid; distinguish by color only
-    # Portfolio → blue, EW Benchmark → orange, S&P 500 → green
+    # Portfolio → blue, EW Benchmark → orange, KOSPI → green, KOSDAQ → purple
     PORTFOLIO_COLOR = "#2E86C1"
     EW_COLOR        = "#E67E22"
-    SP500_COLOR     = "#27AE60"
+    KOSPI_COLOR     = "#27AE60"
+    KOSDAQ_COLOR    = "#8E44AD"
 
     for label, engine, (ax_top, ax_bot) in pairs:
         # Anchor x-axis to the engine's start date so the rolling-Sharpe
@@ -307,15 +311,25 @@ def plot_two_profiles(
                         data["rolling_sharpe"].values,
                         linewidth=lw, linestyle="-", color=c, label=name)
 
-        # ── S&P 500 overlay (solid, green) ────────────────────────────────
-        if sp500_cum is not None:
-            ax_top.plot(sp500_cum.index, sp500_cum.values,
-                        linewidth=1.6, linestyle="-", color=SP500_COLOR,
-                        label="S&P 500")
-        if sp500_rolling is not None:
-            ax_bot.plot(sp500_rolling.index, sp500_rolling.values,
-                        linewidth=1.6, linestyle="-", color=SP500_COLOR,
-                        label="S&P 500")
+        # ── KOSPI overlay (solid, green) ──────────────────────────────────
+        if kospi_cum is not None:
+            ax_top.plot(kospi_cum.index, kospi_cum.values,
+                        linewidth=1.6, linestyle="-", color=KOSPI_COLOR,
+                        label="KOSPI")
+        if kospi_rolling is not None:
+            ax_bot.plot(kospi_rolling.index, kospi_rolling.values,
+                        linewidth=1.6, linestyle="-", color=KOSPI_COLOR,
+                        label="KOSPI")
+
+        # ── KOSDAQ overlay (solid, purple) ────────────────────────────────
+        if kosdaq_cum is not None:
+            ax_top.plot(kosdaq_cum.index, kosdaq_cum.values,
+                        linewidth=1.6, linestyle="-", color=KOSDAQ_COLOR,
+                        label="KOSDAQ")
+        if kosdaq_rolling is not None:
+            ax_bot.plot(kosdaq_rolling.index, kosdaq_rolling.values,
+                        linewidth=1.6, linestyle="-", color=KOSDAQ_COLOR,
+                        label="KOSDAQ")
 
         # ── Formatting ───────────────────────────────────────────────────
         for ax, ylabel, title_suffix, formatter in [

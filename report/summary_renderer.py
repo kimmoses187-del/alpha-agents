@@ -211,8 +211,10 @@ def _make_backtest_fig(backtest_results: dict) -> plt.Figure:
         neutral_engine=backtest_results["risk-neutral"],
         company_name="",       # title already on the PDF page
         save_path=None,
-        sp500_cum=backtest_results.get("sp500_cum"),
-        sp500_rolling=backtest_results.get("sp500_rolling"),
+        kospi_cum=backtest_results.get("kospi_cum"),
+        kospi_rolling=backtest_results.get("kospi_rolling"),
+        kosdaq_cum=backtest_results.get("kosdaq_cum"),
+        kosdaq_rolling=backtest_results.get("kosdaq_rolling"),
     )
     return fig
 
@@ -456,8 +458,9 @@ def build_pdf(
         story.append(_fig_to_rl_image(bt_fig, usable_w, usable_w * 0.52))
         story.append(Spacer(1, 0.2 * cm))
         story.append(Paragraph(
-            "Benchmarks: equal-weight of all analysed stocks (EW Benchmark, orange) "
-            "and S&P 500 (green).  Rolling Sharpe computed over a 30-trading-day window; "
+            "Benchmarks: equal-weight of all analysed stocks (EW Benchmark, orange), "
+            "KOSPI (green), and KOSDAQ (purple).  "
+            "Rolling Sharpe computed over a 30-trading-day window; "
             "the left margin is intentionally blank during the warm-up period.",
             sty["caption"],
         ))

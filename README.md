@@ -123,7 +123,8 @@ After all stocks are analysed, the **PortfolioAgent** constructs two separate po
 
 **Benchmarks overlaid on every chart:**
 1. **EW Benchmark** — equal-weight of all analysed stocks regardless of signal (orange)
-2. **S&P 500** — fetched via yfinance (green)
+2. **KOSPI** — `^KS11` fetched via yfinance (green)
+3. **KOSDAQ** — `^KQ11` fetched via yfinance (purple)
 
 Backtesting is skipped automatically if no stocks qualify for equity allocation in either profile.
 
