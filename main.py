@@ -929,6 +929,7 @@ def main() -> None:
     print("\n  [N] New analysis         — fetch data, run agents, save signals")
     print("  [L] Load saved signals   — load signals, then choose save or backtest")
     print("  [B] Load & run backtest  — load signals and go straight to backtest")
+    print("\n  Tip: build a research experiment with  run experiment")
 
     while True:
         choice = input("\n  Choice (N / L / B): ").strip().upper()
@@ -1184,4 +1185,9 @@ def _run_backtest_menu(orchestrator, quarterly_data: dict, sorted_dates: list) -
 
 
 if __name__ == "__main__":
-    main()
+    # `run experiment` (→ python3 main.py experiment) opens the experiment-recipe builder.
+    if len(sys.argv) > 1 and sys.argv[1] == "experiment":
+        from experiments.new_experiment import main as build_experiment
+        build_experiment()
+    else:
+        main()
