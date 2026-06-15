@@ -215,8 +215,10 @@ def main() -> None:
     if total_runs >= 30:
         print(f"  ⚠️  That's a lot of runs — dry-run with DEBUG_MODE first to estimate cost.")
     print("-" * 60)
-    print("  Next: run it with the experiment runner (coming next), or")
-    print(f"        open {os.path.relpath(path)} to tweak it by hand.\n")
+    print("  Next:")
+    print(f"    DEBUG_MODE=true run experiment {name}   # free dry-run first")
+    print(f"    run experiment {name}                   # real run")
+    print(f"  Or open {os.path.relpath(path)} to tweak it by hand.\n")
 
 
 if __name__ == "__main__":
