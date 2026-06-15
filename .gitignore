@@ -15,6 +15,9 @@ reports/
 # graphify knowledge-graph output — generated, not source
 graphify-out/
 
+# Experiment result tables — generated output, not source
+experiments/results/*.csv
+
 # macOS
 .DS_Store
 

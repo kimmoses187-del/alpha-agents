@@ -335,6 +335,11 @@ alpha_agents/
 │   ├── exporters.py               # Excel (.xlsx) + Word (.docx) export
 │   └── summary_renderer_demo.py   # Standalone demo with mock data
 │
+├── experiments/                   # Research harness — drives the pipeline from outside
+│   ├── new_experiment.py          # Guided Q&A → recipe YAML  (`run experiment`)
+│   ├── recipes/                   # Experiment definitions (one YAML = one design)
+│   └── results/                   # Result tables (CSV) — generated
+│
 └── reports/                       # Auto-created on first run
     └── {run_date}/                ← date the analysis was run
         └── {as_of_date}/          ← data cutoff date
@@ -461,6 +466,46 @@ Skip the full analysis and go straight to portfolio construction and backtesting
 
   Enter file numbers to load (e.g. 1  or  1,3,4): 1,2,3,4,5
 ```
+
+---
+
+## Research Experiments
+
+Because the run parameters are now first-class (selectable profiles and agents),
+you can compare conditions systematically with a thin experiment harness in
+`experiments/`. It **drives** the existing pipeline from the outside — the main
+analyze → portfolio → backtest → report flow is untouched.
+
+**Build a recipe** (a guided Q&A that writes a YAML design file):
+
+```
+run experiment
+```
+
+It asks for the stock pool, as-of date, risk profile(s), repeats, and the
+**setups to compare** (each an odd-sized agent subset), then saves
+`experiments/recipes/<name>.yaml`:
+
+```yaml
+name: macro-ablation
+question: Does removing the Macro agent change results?
+stocks: ["005930", "000660"]
+as_of: 2025/06/01
+profiles: [risk-neutral]
+repeats: 5                         # the debate is an LLM and varies → average over repeats
+conditions:
+  - name: all-five
+    agents: [FundamentalAgent, SentimentAgent, TechnicalAgent, MarketAgent, MacroAgent]
+  - name: no-macro
+    agents: [FundamentalAgent, SentimentAgent, TechnicalAgent]
+```
+
+You can also copy `experiments/recipes/_template.yaml` and edit it by hand.
+Agent counts are forced **odd** (1/3/5) so the majority vote can't tie, and the
+recipe is the *design* — written down before the run so results are reproducible.
+
+> The runner that executes a recipe (each condition × repeat × stock → results CSV)
+> is the next addition. See `experiments/README.md`.
 
 ---
 

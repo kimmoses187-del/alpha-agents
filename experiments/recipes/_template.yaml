@@ -1,0 +1,26 @@
+# Experiment recipe template
+# ===========================
+# Copy this file, rename it (e.g. macro_ablation.yaml), and edit the values.
+# Or generate one by answering questions:  python3 experiments/new_experiment.py
+#
+# Only change the text after the colons. Keep the indentation (2 spaces).
+
+name: my_experiment                 # short id; also the output filename
+question: "What am I testing?"       # a note to your future self
+
+stocks:                             # 6-digit KRX codes (keep leading zeros!)
+  - "005930"                        # Samsung Electronics
+  - "000660"                        # SK Hynix
+
+as_of: 2025/06/01                   # analysis date (data before this is used)
+
+profiles:                           # every run uses these profile(s)
+  - risk-neutral                    # risk-averse / risk-neutral (list one or both)
+
+repeats: 5                          # times to run each setup (LLM varies → average)
+
+conditions:                         # the setups to compare (one or more)
+  - name: all_five
+    agents: [FundamentalAgent, SentimentAgent, TechnicalAgent, MarketAgent, MacroAgent]
+  - name: no_macro                  # must be an ODD agent count (1/3/5)
+    agents: [FundamentalAgent, SentimentAgent, TechnicalAgent]
