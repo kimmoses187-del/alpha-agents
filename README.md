@@ -337,6 +337,7 @@ alpha_agents/
 │
 ├── experiments/                   # Research harness — drives the pipeline from outside
 │   ├── new_experiment.py          # Guided Q&A → recipe YAML  (`run experiment`)
+│   ├── runner.py                  # Runs a recipe → results CSV  (`run experiment <name>`)
 │   ├── recipes/                   # Experiment definitions (one YAML = one design)
 │   └── results/                   # Result tables (CSV) — generated
 │
@@ -504,8 +505,26 @@ You can also copy `experiments/recipes/_template.yaml` and edit it by hand.
 Agent counts are forced **odd** (1/3/5) so the majority vote can't tie, and the
 recipe is the *design* — written down before the run so results are reproducible.
 
-> The runner that executes a recipe (each condition × repeat × stock → results CSV)
-> is the next addition. See `experiments/README.md`.
+**Run a recipe:**
+
+```
+DEBUG_MODE=true run experiment macro-ablation   # free dry-run (stubbed LLM)
+run experiment macro-ablation                   # real run (confirms cost first)
+```
+
+For each stock the runner fetches data once, then runs the debate once per
+*(condition × repeat)* — the LLM debate is the stochastic part, which is what
+`repeats` samples. It writes one results CSV (no per-run report files) with full
+provenance (`signal, conviction, agents, model, git_sha, run_ts, …`) and prints
+an averaged summary (BUY rate, mean conviction, ± std):
+
+```
+  condition     profile        BUY rate  avg conv   ± std
+  all-five      Risk-Neutral       80%      0.90    0.04
+  no-macro      Risk-Neutral       50%      0.67    0.12
+```
+
+Results land in `experiments/results/<name>_<date>.csv`. See `experiments/README.md`.
 
 ---
 

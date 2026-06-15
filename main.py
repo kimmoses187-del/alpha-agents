@@ -1185,9 +1185,14 @@ def _run_backtest_menu(orchestrator, quarterly_data: dict, sorted_dates: list) -
 
 
 if __name__ == "__main__":
-    # `run experiment` (→ python3 main.py experiment) opens the experiment-recipe builder.
+    # `run experiment`        → build a recipe (guided Q&A)
+    # `run experiment <name>` → run that recipe
     if len(sys.argv) > 1 and sys.argv[1] == "experiment":
-        from experiments.new_experiment import main as build_experiment
-        build_experiment()
+        if len(sys.argv) > 2:
+            from experiments.runner import main as run_experiment
+            run_experiment(sys.argv[2])
+        else:
+            from experiments.new_experiment import main as build_experiment
+            build_experiment()
     else:
         main()
